@@ -6,6 +6,7 @@ import mediapipe as mp
 from pathlib import Path
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from typing import Tuple, List
 
 
 # Mencoba untuk supress (menyembunyikan) log warning dari TensorFlow mediapipe
@@ -30,6 +31,23 @@ class FaceLandmark:
     landmarker: vision.FaceLandmarker #type: ignore
 
     landmark: vision.FaceLandmarkerResult | None #type: ignore
+
+    FACE_OVAL: List[int] = [
+        10, 338, 297, 332, 284, 251, 389, 356,
+        454, 323, 361, 288, 397, 365, 379, 378,
+        400, 377, 152, 148, 176, 149, 150, 136,
+        172, 58, 132, 93, 234, 127, 162, 21,
+        54, 103, 67, 109
+    ]
+
+    STABLE_POINTS: List[int] = [
+        1,    # nose tip
+        33,   # left eye outer
+        263,  # right eye outer
+        61,   # mouth left
+        291   # mouth right
+    ]
+
 
     def __init__(self):
 
@@ -97,49 +115,71 @@ class FaceLandmark:
         return self.landmark
 
 
-    def crop(self, image: np.ndarray, margin: float = 0.2) -> np.ndarray | None: #type: ignore
+    def crop(self,
+             image: np.ndarray,
+             landmarks: vision.FaceLandmarkerResult = None,  # type: ignore
+             landmark_indices: List[int] = None,
+             margin: float = 0.05,
+             output_size: Tuple[int, int] = (240, 240)) -> np.ndarray:
         """
         Melakukan cropping wajah berdasarkan landmark yang terdeteksi
-        
+
         Args:
-            landmark: Hasil deteksi dari FaceLandmarker
+            image: Citra input dalam format numpy ndarray
+            landmarks: Hasil deteksi landmark (opsional)
+            landmark_indices: Indeks landmark yang akan digunakan untuk cropping (opsional)
+            margin: Margin tambahan untuk bounding box (default: 0.05)
+            output_size: Ukuran output citra setelah cropping dan resizing (default: (240, 240))
 
         Returns:
-            np.ndarray | None: Citra wajah yang telah di-crop atau None jika tidak ada wajah terdeteksi
+            np.ndarray: Citra wajah yang telah di-crop dan di-resize
+
+        Raises:
+            ValueError: Jika landmark tidak tersedia atau tidak ada landmark yang terdeteksi
         """
 
-        # Memastikan bahwa telah memiliki titik landmark sebelum melakukan cropping
-        # Jika belum melakukan deteksi landmark, maka raise dengan ValueError
-        if self.landmark is None:
-            raise ValueError("Landmark detection has not been performed yet due to missing landmark data.")
+        # Validasi landmark yang diberikan telah sesuai atau tidak
+        # Jika tidak ada landmark yang diberikan dan juga tidak ada landmark yang tersimpan
+        if landmarks is None and self.landmark is None:
+            raise ValueError("Landmark detection has not been performed.")
 
-        # Memastikan bahwa ada wajah yang terdeteksi sebelum melakukan cropping
-        # Jika tidak ada wajah yang terdeteksi, maka raise dengan ValueError
-        if not self.landmark.face_landmarks:
-            raise ValueError("No face landmarks detected to perform cropping.")
+        # Gunakan landmark yang diberikan atau yang tersimpan
+        final_landmarks = landmarks if landmarks is not None else self.landmark
 
-        # Melakukan crop wajah berdasarkan landmark yang terdeteksi
+        # Jika tidak ada landmark yang terdeteksi
+        # Maka raise dengan ValueError yang menunjukkan tidak ada landmark yang terdeteksi
+        if not final_landmarks.face_landmarks:
+            raise ValueError("No face landmarks detected.")
+
+        # Gunakan indeks landmark default jika tidak diberikan
+        if landmark_indices is None:
+            landmark_indices = self.FACE_OVAL
+
+        # Gabungkan dengan titik stabil untuk memastikan cropping yang konsisten
+        effective_indices = landmark_indices + self.STABLE_POINTS
+
         h, w, _ = image.shape
+        face_landmarks = final_landmarks.face_landmarks[0]
 
-        landmarks = self.landmark.face_landmarks[0]
+        # Ambil koordinat landmark subset yang diinginkan
+        xs = [face_landmarks[i].x * w for i in effective_indices]
+        ys = [face_landmarks[i].y * h for i in effective_indices]
 
-        # Mendapatkan koordinat x dan y dari semua landmark
-        x_coords = [landmark.x for landmark in landmarks]
-        y_coords = [landmark.y for landmark in landmarks]
+        # Menghitung bounding box dari landmark yang diberikan
+        x_min, x_max = int(min(xs)), int(max(xs))
+        y_min, y_max = int(min(ys)), int(max(ys))
 
-        # Menghitung bounding box dari koordinat landmark
-        x_min, x_max = int(min(x_coords) * w), int(max(x_coords) * w)
-        y_min, y_max = int(min(y_coords) * h), int(max(y_coords) * h)
+        # Menghitung margin tambahan untuk bounding box
+        dx = int((x_max - x_min) * margin)
+        dy = int((y_max - y_min) * margin)
 
-        # Menambahkan margin pada bounding box untuk mengakomodasi area sekitar wajah
-        x_margin = int((x_max - x_min) * margin)
-        y_margin = int((y_max - y_min) * margin)
+        x_min = max(0, x_min - dx)
+        x_max = min(w, x_max + dx)
+        y_min = max(0, y_min - dy)
+        y_max = min(h, y_max + dy)
 
-        # Memastikan bounding box tetap berada dalam batas citra yang asli
-        x_min = max(0, x_min - x_margin)
-        x_max = min(w, x_max + x_margin)
-        y_min = max(0, y_min - y_margin)
-        y_max = min(h, y_max + y_margin)
+        # Memotong citra berdasarkan bounding box yang dihitung
+        face_crop = image[y_min:y_max, x_min:x_max]
+        face_crop = cv2.resize(face_crop, output_size)
 
-        return image[y_min:y_max, x_min:x_max]
-        
+        return face_crop
