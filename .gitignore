@@ -1,0 +1,14 @@
+# Mengabaikan semua file environment variable
+# Hanya menyertakan file contoh environment variable saja
+.env
+.env.*
+!.env.example
+
+# Mengabaikan file cache Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
