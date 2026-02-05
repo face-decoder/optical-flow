@@ -183,3 +183,117 @@ class FaceLandmark:
         face_crop = cv2.resize(face_crop, output_size)
 
         return face_crop
+
+
+    def crop_roi(self,
+                 image: np.ndarray, 
+                 landmark_result: vision.FaceLandmarkerResult, #type: ignore
+                 roi_points: frozenset,
+                 margin: float = 0.05,
+                 target_size: Tuple[int, int] = (64, 64)) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Memotong bagian wajah berdasarkan region of interests (RoI) yang telah didefinisikan
+
+        Args:
+            image (np.ndarray): Citra input dalam format numpy ndarray
+            landmark_result (FaceLandmarkerResult): Hasil deteksi landmark dari FaceLandmarker
+            roi_points (frozenset): Koneksi titik landmark yang mendefinisikan RoI
+            margin (float, optional): Margin tambahan untuk bounding box. Default adalah 0.05
+            target_size (Tuple[int, int], optional): Ukuran target output citra RoI. Default adalah (64, 64)
+            
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: Tuple berisi citra RoI yang telah dipotong dan mask-nya
+            
+        Raises:
+            ValueError: Jika citra input atau hasil deteksi landmark tidak valid
+        """
+        
+        # Validasi citra input berupa numpy ndarray
+        # Jika tidak, maka raise dengan ValueError
+        if not isinstance(image, np.ndarray):
+            raise ValueError("Input image must be a numpy ndarray.")
+        
+        # Validasi citra input tidak kosong
+        # Jika kosong, maka raise dengan ValueError
+        if image.size == 0:
+            raise ValueError("Input image is empty.")
+        
+        # Validasi hasil deteksi landmark
+        # Jika tidak ada hasil deteksi, maka raise dengan ValueError
+        if landmark_result is None or not landmark_result.face_landmarks:
+            raise ValueError("No face landmarks detected.")
+        
+        h, w = image.shape[:2]
+
+        landmarks = landmark_result.face_landmarks[0]
+
+        # Mengumpulkan semua indeks landmark yang terlibat dalam RoI
+        roi_indices = set()
+        for a, b in roi_points:
+            roi_indices.add(a)
+            roi_indices.add(b)
+
+        # Menghitung bounding box dari landmark RoI
+        xs = [landmarks[i].x * w for i in roi_indices]
+        ys = [landmarks[i].y * h for i in roi_indices]
+
+        # Menghitung koordinat bounding box untuk margin tambahan
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+
+        # Menghitung tambahan margin tambahan untuk bounding box
+        dx = (x_max - x_min) * margin
+        dy = (y_max - y_min) * margin
+
+        # Menghitung koordinat akhir bounding box dengan margin
+        x1 = int(max(0, x_min - dx))
+        y1 = int(max(0, y_min - dy))
+        x2 = int(min(w, x_max + dx))
+        y2 = int(min(h, y_max + dy))
+
+        # Memotong citra berdasarkan bounding box yang dihitung
+        roi = image[y1:y2, x1:x2]
+
+        if roi.size == 0:
+            raise ValueError("Empty ROI after cropping.")
+
+        th, tw = target_size
+        rh, rw = roi.shape[:2]
+
+        # Menghitung skala untuk resizing sambil mempertahankan aspek rasio
+        scale = min(tw / rw, th / rh)
+
+        # Menghitung ukuran baru setelah scaling
+        new_w = int(rw * scale)
+        new_h = int(rh * scale)
+
+        # Melakukan resizing pada RoI
+        resized = cv2.resize(roi, (new_w, new_h))
+
+        # Membuat citra output dengan ukuran target dan mengisi dengan nol (hitam)
+        output = np.zeros((th, tw, 3), dtype=roi.dtype)
+        x_off = (tw - new_w) // 2
+        y_off = (th - new_h) // 2
+
+        # Menempatkan citra yang telah di-resize ke dalam citra output di tengah
+        output[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+
+        # Menghitung masking area
+        mask = np.zeros((th, tw), dtype=np.uint8)
+
+        # Menghitung polygon RoI pada citra output
+        roi_polygon = []
+        for i in roi_indices:
+            px = landmarks[i].x * w - x1
+            py = landmarks[i].y * h - y1
+
+            px = px * scale + x_off
+            py = py * scale + y_off
+
+            roi_polygon.append([int(px), int(py)])
+
+        # Mengisi polygon pada mask
+        roi_polygon = np.array(roi_polygon, dtype=np.int32)
+        cv2.fillConvexPoly(mask, roi_polygon, 255)
+
+        return output, mask
